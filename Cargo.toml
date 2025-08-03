@@ -1,0 +1,38 @@
+[package]
+name = "canp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0"
+lock_pool = "0.2"
+lru = "0.13"
+memmap2 = "0.9"
+tempfile = "3.10"
+tokio = { version = "1.36", features = ["full"] }
+tracing = "0.1"
+num_cpus = "1.16"
+rayon = "1.8"
+threadpool = "1.8"
+can-dbc = "6.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+metrics = "0.22"
+metrics-exporter-prometheus = "0.13"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+tokio-test = "0.4"
+
+[[bench]]
+name = "memory_pool_bench"
+harness = false
+
+[[bench]]
+name = "dbc_parser_bench"
+harness = false
+
+[[bench]]
+name = "thread_pool_bench"
+harness = false

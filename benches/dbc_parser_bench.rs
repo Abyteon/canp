@@ -1,0 +1,312 @@
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use canp::dbc_parser::{DbcParser, DbcParserConfig};
+
+fn dbc_parser_creation_benchmark(c: &mut Criterion) {
+    c.bench_function("dbc_parser_creation", |b| {
+        b.iter(|| {
+            let config = DbcParserConfig::default();
+            let _parser = DbcParser::new(config);
+        });
+    });
+}
+
+fn dbc_parser_simple_content_benchmark(c: &mut Criterion) {
+    let config = DbcParserConfig::default();
+    let parser = DbcParser::new(config);
+    
+    let simple_dbc = r#"
+VERSION ""
+
+NS_ :
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VAL_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+	BO_TX_BU_
+	BA_DEF_REL_
+	BA_REL_
+	BA_DEF_DEF_REL_
+	BU_SG_REL_
+	BU_EV_REL_
+	BU_BO_REL_
+	SG_MUL_VAL_
+
+BS_:
+
+BU_: Vector__XXX
+
+BO_ 100 EngineData: 8 Vector__XXX
+ SG_ EngineSpeed : 0|16@1+ (0.125,0) [0|8031.875] "rpm" Vector__XXX
+ SG_ EngineTemp : 16|8@1+ (1,-40) [-40|215] "degC" Vector__XXX
+
+BA_DEF_ "BusType" STRING ;
+BA_DEF_DEF_ "BusType" "CAN" ;
+BA_ "BusType" "CAN" ;
+"#;
+    
+    c.bench_function("dbc_parser_simple_content", |b| {
+        b.iter(|| {
+            let _result = parser.parse_content(black_box(simple_dbc));
+        });
+    });
+}
+
+fn dbc_parser_complex_content_benchmark(c: &mut Criterion) {
+    let config = DbcParserConfig::default();
+    let parser = DbcParser::new(config);
+    
+    let complex_dbc = r#"
+VERSION "2.0"
+
+NS_ :
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VALTYPE_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+	BO_TX_BU_
+	BA_DEF_REL_
+	BA_REL_
+	BA_DEF_DEF_REL_
+	BU_SG_REL_
+	BU_EV_REL_
+	BU_BO_REL_
+	SG_MUL_VAL_
+
+BS_:
+
+BU_: Gateway Body_ECU Engine_ECU Transmission_ECU Brake_ECU Steering_ECU
+
+BO_ 500 GatewayStatus: 8 Gateway
+ SG_ GatewayStatus : 0|8@1+ (1,0) [0|255] "" Gateway
+ SG_ MessageCount : 8|16@1+ (1,0) [0|65535] "" Gateway
+ SG_ ErrorCount : 24|16@1+ (1,0) [0|65535] "" Gateway
+ SG_ BusLoad : 40|8@1+ (0.392157,0) [0|100] "%" Gateway
+ SG_ Temperature : 48|8@1+ (1,-40) [-40|215] "degC" Gateway
+ SG_ Voltage : 56|8@1+ (0.1,10) [10|15.5] "V" Gateway
+
+BO_ 600 MultiplexedData: 8 Body_ECU
+ SG_ Multiplexor : 0|4@1+ (1,0) [0|15] "" Body_ECU
+ SG_ Temperature1 m0 : 8|8@1+ (1,-40) [-40|215] "degC" Body_ECU
+ SG_ Temperature2 m0 : 16|8@1+ (1,-40) [-40|215] "degC" Body_ECU
+ SG_ Temperature3 m0 : 24|8@1+ (1,-40) [-40|215] "degC" Body_ECU
+ SG_ Temperature4 m0 : 32|8@1+ (1,-40) [-40|215] "degC" Body_ECU
+ SG_ Pressure1 m1 : 8|16@1+ (0.01,0) [0|655.35] "kPa" Body_ECU
+ SG_ Pressure2 m1 : 24|16@1+ (0.01,0) [0|655.35] "kPa" Body_ECU
+ SG_ Pressure3 m1 : 40|16@1+ (0.01,0) [0|655.35] "kPa" Body_ECU
+ SG_ Pressure4 m1 : 56|16@1+ (0.01,0) [0|655.35] "kPa" Body_ECU
+ SG_ Speed1 m2 : 8|16@1+ (0.00390625,0) [0|255.996] "km/h" Body_ECU
+ SG_ Speed2 m2 : 24|16@1+ (0.00390625,0) [0|255.996] "km/h" Body_ECU
+ SG_ Speed3 m2 : 40|16@1+ (0.00390625,0) [0|255.996] "km/h" Body_ECU
+ SG_ Speed4 m2 : 56|16@1+ (0.00390625,0) [0|255.996] "km/h" Body_ECU
+
+BO_ 700 ExtendedEngineData: 8 Engine_ECU
+ SG_ EngineRPM : 0|16@1+ (0.125,0) [0|8031.875] "rpm" Engine_ECU
+ SG_ EngineTorque : 16|16@1+ (0.1,-3276.8) [-3276.8|3276.7] "Nm" Engine_ECU
+ SG_ FuelConsumption : 32|16@1+ (0.01,0) [0|655.35] "L/100km" Engine_ECU
+ SG_ AirFuelRatio : 48|16@1+ (0.01,0) [0|655.35] "" Engine_ECU
+ SG_ TurboBoost : 56|8@1+ (0.1,0) [0|25.5] "bar" Engine_ECU
+
+BO_ 800 BrakeSystemData: 6 Brake_ECU
+ SG_ BrakePressure_FL : 0|16@1+ (0.01,0) [0|655.35] "bar" Brake_ECU
+ SG_ BrakePressure_FR : 16|16@1+ (0.01,0) [0|655.35] "bar" Brake_ECU
+ SG_ BrakePressure_RL : 32|16@1+ (0.01,0) [0|655.35] "bar" Brake_ECU
+ SG_ BrakePressure_RR : 48|16@1+ (0.01,0) [0|655.35] "bar" Brake_ECU
+
+BO_ 900 SteeringData: 4 Steering_ECU
+ SG_ SteeringAngle : 0|16@1+ (0.1,-3276.8) [-3276.8|3276.7] "deg" Steering_ECU
+ SG_ SteeringTorque : 16|16@1+ (0.1,-3276.8) [-3276.8|3276.7] "Nm" Steering_ECU
+ SG_ SteeringSpeed : 32|16@1+ (0.1,-3276.8) [-3276.8|3276.7] "deg/s" Steering_ECU
+
+CM_ "Gateway status information";
+CM_ BO_ 500 "Gateway status message";
+CM_ SG_ 500 GatewayStatus "Gateway operational status";
+
+VAL_TABLE_ GatewayStatus 0 "Offline" 1 "Online" 2 "Error" 3 "Maintenance" ;
+
+VAL_TABLE_ Multiplexor 0 "Temperature" 1 "Pressure" 2 "Speed" ;
+
+BA_DEF_ "BusType" STRING ;
+BA_DEF_ "NetworkManagement" ENUM "Yes","No" ;
+BA_DEF_DEF_ "BusType" "CAN" ;
+BA_DEF_DEF_ "NetworkManagement" "No" ;
+BA_ "BusType" "CAN" ;
+BA_ "NetworkManagement" "Yes" ;
+"#;
+    
+    c.bench_function("dbc_parser_complex_content", |b| {
+        b.iter(|| {
+            let _result = parser.parse_content(black_box(complex_dbc));
+        });
+    });
+}
+
+fn dbc_parser_messages_info_benchmark(c: &mut Criterion) {
+    let config = DbcParserConfig::default();
+    let parser = DbcParser::new(config);
+    
+    let dbc_content = r#"
+VERSION ""
+
+NS_ :
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VAL_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+	BO_TX_BU_
+	BA_DEF_REL_
+	BA_REL_
+	BA_DEF_DEF_REL_
+	BU_SG_REL_
+	BU_EV_REL_
+	BU_BO_REL_
+	SG_MUL_VAL_
+
+BS_:
+
+BU_: Engine_ECU Body_ECU Transmission_ECU
+
+BO_ 100 EngineData: 8 Engine_ECU
+ SG_ EngineSpeed : 0|16@1+ (0.125,0) [0|8031.875] "rpm" Engine_ECU
+ SG_ EngineTemp : 16|8@1+ (1,-40) [-40|215] "degC" Engine_ECU
+ SG_ EngineLoad : 24|8@1+ (0.392157,0) [0|100] "%" Engine_ECU
+ SG_ ThrottlePosition : 32|8@1+ (0.392157,0) [0|100] "%" Engine_ECU
+ SG_ FuelPressure : 40|8@1+ (0.1,0) [0|25.5] "bar" Engine_ECU
+ SG_ OilPressure : 48|8@1+ (0.1,0) [0|25.5] "bar" Engine_ECU
+ SG_ BatteryVoltage : 56|8@1+ (0.1,10) [10|15.5] "V" Engine_ECU
+
+BO_ 200 VehicleData: 6 Body_ECU
+ SG_ VehicleSpeed : 0|16@1+ (0.00390625,0) [0|255.996] "km/h" Body_ECU
+ SG_ WheelSpeed_FL : 16|16@1+ (0.00390625,0) [0|255.996] "km/h" Body_ECU
+ SG_ WheelSpeed_FR : 32|16@1+ (0.00390625,0) [0|255.996] "km/h" Body_ECU
+ SG_ WheelSpeed_RL : 48|16@1+ (0.00390625,0) [0|255.996] "km/h" Body_ECU
+
+BA_DEF_ "BusType" STRING ;
+BA_DEF_DEF_ "BusType" "CAN" ;
+BA_ "BusType" "CAN" ;
+"#;
+    
+    let result = parser.parse_content(dbc_content).unwrap();
+    
+    c.bench_function("dbc_parser_messages_info", |b| {
+        b.iter(|| {
+            let _messages_info = parser.get_messages_info(black_box(&result.dbc));
+        });
+    });
+}
+
+fn dbc_parser_validation_benchmark(c: &mut Criterion) {
+    let config = DbcParserConfig::default();
+    let parser = DbcParser::new(config);
+    
+    let dbc_content = r#"
+VERSION ""
+
+NS_ :
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VAL_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+	BO_TX_BU_
+	BA_DEF_REL_
+	BA_REL_
+	BA_DEF_DEF_REL_
+	BU_SG_REL_
+	BU_EV_REL_
+	BU_BO_REL_
+	SG_MUL_VAL_
+
+BS_:
+
+BU_: Engine_ECU
+
+BO_ 100 EngineData: 8 Engine_ECU
+ SG_ EngineSpeed : 0|16@1+ (0.125,0) [0|8031.875] "rpm" Engine_ECU
+ SG_ EngineTemp : 16|8@1+ (1,-40) [-40|215] "degC" Engine_ECU
+
+BA_DEF_ "BusType" STRING ;
+BA_DEF_DEF_ "BusType" "CAN" ;
+BA_ "BusType" "CAN" ;
+"#;
+    
+    let result = parser.parse_content(dbc_content).unwrap();
+    
+    c.bench_function("dbc_parser_validation", |b| {
+        b.iter(|| {
+            let _validation = parser.validate_dbc(black_box(&result.dbc));
+        });
+    });
+}
+
+criterion_group!(
+    dbc_parser_benches,
+    dbc_parser_creation_benchmark,
+    dbc_parser_simple_content_benchmark,
+    dbc_parser_complex_content_benchmark,
+    dbc_parser_messages_info_benchmark,
+    dbc_parser_validation_benchmark,
+);
+criterion_main!(dbc_parser_benches); 

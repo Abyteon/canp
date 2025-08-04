@@ -1,13 +1,15 @@
-pub mod memory_pool;
-pub mod thread_pool;
+pub mod zero_copy_memory_pool;
+pub mod high_performance_executor;
+pub mod data_layer_parser;
 pub mod dbc_parser;
-pub mod performance;
-pub mod layer_parser;
-pub mod pipeline;
+pub mod columnar_storage;
+pub mod processing_pipeline;
+pub mod test_data_generator;
 
-pub use memory_pool::*;
-pub use thread_pool::*;
-pub use dbc_parser::*;
-pub use performance::*;
-pub use layer_parser::*;
-pub use pipeline::*; 
+pub use zero_copy_memory_pool::*;
+pub use high_performance_executor::*;
+pub use data_layer_parser::{DataLayerParser, ParsedFileData, CanFrame, FileHeader, DecompressedHeader};
+pub use dbc_parser::{DbcManager, DbcManagerConfig, ParsedMessage, ParsedSignal};
+pub use columnar_storage::{ColumnarStorageWriter, ColumnarStorageConfig};
+pub use processing_pipeline::{DataProcessingPipeline, PipelineConfig};
+pub use test_data_generator::{TestDataGenerator, TestDataConfig}; 

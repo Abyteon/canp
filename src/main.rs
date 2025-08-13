@@ -42,6 +42,8 @@ async fn main() -> Result<()> {
         ],
         mmap_cache_size: 1000, // 缓存1000个文件映射
         max_memory_usage: 2 * 1024 * 1024 * 1024, // 2GB内存限制
+        enable_mmap_cache: false,
+        prewarm_per_tier: 0,
     };
     let memory_pool = Arc::new(ZeroCopyMemoryPool::new(memory_pool_config.clone()));
 

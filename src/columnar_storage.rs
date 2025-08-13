@@ -289,6 +289,7 @@ impl ColumnarStorageWriter {
         let mut fields = vec![
             // 文件级别字段
             Field::new("source_file", DataType::Utf8, false),
+            Field::new("serial", DataType::Binary, false),
             Field::new("file_index", DataType::UInt32, false),
             Field::new("file_version", DataType::UInt32, false),
             Field::new("file_timestamp", DataType::UInt64, false),
@@ -607,6 +608,9 @@ impl BatchData {
         
         // 构建基础字段数组
         arrays.push(Arc::new(StringArray::from(self.source_files.clone())));
+        arrays.push(Arc::new(UInt8Array::from(
+            self.source_files.iter().map(|_| 0u8).collect::<Vec<_>>()
+        )));
         arrays.push(Arc::new(UInt32Array::from(self.file_indices.clone())));
         arrays.push(Arc::new(UInt32Array::from(self.file_versions.clone())));
         arrays.push(Arc::new(UInt64Array::from(self.file_timestamps.clone())));

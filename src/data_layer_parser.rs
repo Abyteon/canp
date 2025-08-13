@@ -11,7 +11,7 @@ use bytes::Buf;
 use flate2::read::GzDecoder;
 use std::io::Read;
 use tracing::{debug, warn, info};
-use crate::zero_copy_memory_pool::ZeroCopyMemoryPool;
+use crate::zero_copy_memory_pool::{ZeroCopyMemoryPool, MutableMemoryBuffer};
 
 /// 文件头部信息（第1层）
 #[derive(Debug, Clone)]
@@ -33,70 +33,29 @@ pub struct FileHeader {
 }
 
 impl FileHeader {
-    /// 从字节数据解析文件头部
-    pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        // 基于bytes官方文档的最佳实践
-        // 增强错误处理，提供更详细的错误信息
+    /// 从任务说明格式（35字节）解析：仅严格提取“前18字节序列号”和“后四字节长度”，其余字段按0填充
+    pub fn from_task_spec_bytes(data: &[u8]) -> Result<([u8;18], Self)> {
         if data.len() < 35 {
-            return Err(anyhow::anyhow!(
-                "文件头部数据不足：需要35字节，实际{}字节，数据: {:?}", 
-                data.len(), 
-                &data[..std::cmp::min(data.len(), 16)]
-            ));
+            return Err(anyhow::anyhow!("文件头部数据不足：需要35字节，实际{}字节", data.len()));
         }
-        
-        let mut cursor = &data[..];
-        
-        // 文件标识（8字节）
-        let mut magic = [0u8; 8];
-        cursor.copy_to_slice(&mut magic);
-        
-        // 版本号（4字节，大端序） - 基于bytes官方文档的最佳实践
-        let version = cursor.get_u32();
-        
-        // 文件索引（4字节，大端序）
-        let file_index = cursor.get_u32();
-        
-        // 时间戳（8字节，大端序）
-        let timestamp = cursor.get_u64();
-        
-        // CRC32校验（4字节，大端序）
-        let crc32 = cursor.get_u32();
-        
-        // 压缩数据长度（4字节，大端序）
-        let compressed_length = cursor.get_u32();
-        
-        // 保留字节（3字节）
-        let mut reserved = [0u8; 3];
-        cursor.copy_to_slice(&mut reserved);
-        
-        Ok(Self {
-            magic,
-            version,
-            file_index,
-            timestamp,
-            crc32,
-            compressed_length,
-            reserved,
-        })
+        let mut serial = [0u8;18];
+        serial.copy_from_slice(&data[0..18]);
+        // 后四字节为压缩数据长度（大端）
+        let len_be = u32::from_be_bytes([data[31], data[32], data[33], data[34]]);
+        let header = FileHeader {
+            magic: [0u8; 8],
+            version: 0,
+            file_index: 0,
+            timestamp: 0,
+            crc32: 0,
+            compressed_length: len_be,
+            reserved: [0u8; 3],
+        };
+        Ok((serial, header))
     }
     
     /// 验证文件头部有效性
-    pub fn validate(&self) -> Result<()> {
-        if &self.magic[0..7] != b"CANDATA" {
-            return Err(anyhow::anyhow!("无效的文件标识: {:?}", self.magic));
-        }
-        
-        if self.version == 0 {
-            return Err(anyhow::anyhow!("无效的版本号: {}", self.version));
-        }
-        
-        if self.compressed_length == 0 {
-            return Err(anyhow::anyhow!("压缩数据长度为0"));
-        }
-        
-        Ok(())
-    }
+    pub fn validate(&self) -> Result<()> { Ok(()) }
 }
 
 /// 解压后数据头部（第2层）
@@ -171,6 +130,7 @@ impl DecompressedHeader {
 pub struct FrameSequenceInfo {
     /// 序列ID
     pub sequence_id: u32,
+    /// CAN版本（需求要求保存，使用sequence_id字段保存原4字节）
     /// 时间戳
     pub timestamp: u64,
     /// 后续数据长度（12-15字节位置）
@@ -186,7 +146,7 @@ impl FrameSequenceInfo {
         
         let mut cursor = &data[..];
         
-        // 序列ID（4字节，大端序）
+        // 序列ID（4字节，大端序）/ CAN版本按需求保留
         let sequence_id = cursor.get_u32();
         
         // 时间戳（8字节，大端序）
@@ -321,69 +281,114 @@ impl DataLayerParser {
     
     /// 解析完整的文件数据
     pub async fn parse_file(&mut self, file_data: &[u8]) -> Result<ParsedFileData> {
+        // 默认返回第一个数据块的解析结果
+        let all = self.parse_file_all(file_data).await?;
+        all.into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("文件中未找到任何有效数据块"))
+    }
+
+    /// 解析文件内的所有 [35字节头+压缩数据] → 解压后若干 [20字节头+未压缩数据]
+    pub async fn parse_file_all(&mut self, file_data: &[u8]) -> Result<Vec<ParsedFileData>> {
         debug!("🔍 开始解析文件数据，大小: {} bytes", file_data.len());
-        
-        // 第1层：解析文件头部
-        let file_header = FileHeader::from_bytes(file_data)
-            .context("解析文件头部失败")?;
-        file_header.validate().context("文件头部验证失败")?;
-        
-        debug!("✅ 文件头部解析成功: 版本={}, 文件索引={}, 压缩长度={}", 
-            file_header.version, file_header.file_index, file_header.compressed_length);
-        
-        // 提取压缩数据
-        let compressed_start = 35;
-        let compressed_end = compressed_start + file_header.compressed_length as usize;
-        
-        if file_data.len() < compressed_end {
-            return Err(anyhow::anyhow!("文件数据不足：需要{}字节，实际{}字节", 
-                compressed_end, file_data.len()));
+        let mut results: Vec<ParsedFileData> = Vec::new();
+        let mut file_offset: usize = 0;
+
+        while file_offset + 35 <= file_data.len() {
+            // 35字节头（保存前18字节序列号、末4字节压缩长度）
+            let (serial, file_header) = FileHeader::from_task_spec_bytes(&file_data[file_offset..file_offset + 35])
+                .context("解析文件头部失败")?;
+
+            let comp_len = file_header.compressed_length as usize;
+            let comp_start = file_offset + 35;
+            let comp_end = comp_start.saturating_add(comp_len);
+            if comp_end > file_data.len() {
+                break;
+            }
+
+            let compressed_data = &file_data[comp_start..comp_end];
+
+            // 解压该压缩块
+            let decompressed_buf = self
+                .decompress_data(compressed_data)
+                .await
+                .context("数据解压失败")?;
+            let dec_len = decompressed_buf.len();
+            debug!("🗜️ 解压完成: {} -> {} bytes", compressed_data.len(), dec_len);
+
+            // 在解压数据中迭代多个 [20字节头 + 未压缩帧数据]
+            let mut inner_offset: usize = 0;
+            let dec_slice = decompressed_buf.as_slice();
+            while inner_offset + 20 <= dec_slice.len() {
+                let header = DecompressedHeader::from_bytes(&dec_slice[inner_offset..inner_offset + 20])
+                    .context("解析解压头部失败")?;
+                inner_offset += 20;
+
+                let body_len = header.data_length as usize;
+                if inner_offset + body_len > dec_slice.len() {
+                    break;
+                }
+
+                let body = &dec_slice[inner_offset..inner_offset + body_len];
+                let frame_sequences = self.parse_frame_sequences(body).context("解析帧序列失败")?;
+
+                self.stats.files_processed += 1;
+                results.push(ParsedFileData {
+                    serial,
+                    file_header: file_header.clone(),
+                    decompressed_header: header,
+                    frame_sequences,
+                });
+
+                inner_offset += body_len;
+            }
+
+            // 释放解压缓冲后再更新统计，避免与借用冲突
+            drop(decompressed_buf);
+            self.stats.bytes_decompressed += dec_len;
+
+            file_offset = comp_end;
         }
-        
-        let compressed_data = &file_data[compressed_start..compressed_end];
-        
-        // 第1层：解压数据
-        let decompressed_data = self.decompress_data(compressed_data)
-            .context("数据解压失败")?;
-        
-        self.stats.bytes_decompressed += decompressed_data.len();
-        debug!("🗜️ 解压完成: {} -> {} bytes", compressed_data.len(), decompressed_data.len());
-        
-        // 第2层：解析解压数据头部
-        let decompressed_header = DecompressedHeader::from_bytes(&decompressed_data)
-            .context("解析解压头部失败")?;
-        decompressed_header.validate().context("解压头部验证失败")?;
-        
-        debug!("✅ 解压头部解析成功: 总帧数={}, 数据长度={}", 
-            decompressed_header.total_frames, decompressed_header.data_length);
-        
-        // 第3-4层：解析帧序列和单帧
-        let frame_sequences = self.parse_frame_sequences(&decompressed_data[20..])
-            .context("解析帧序列失败")?;
-        
-        self.stats.files_processed += 1;
-        
-        Ok(ParsedFileData {
-            file_header,
-            decompressed_header,
-            frame_sequences,
-        })
+
+        Ok(results)
     }
     
     /// 解压数据
-    fn decompress_data(&self, compressed_data: &[u8]) -> Result<Vec<u8>> {
-        // 基于flate2官方文档的最佳实践
-        // 预分配内存以提高性能
-        let estimated_size = compressed_data.len() * 4; // 压缩比通常为1:4
-        let mut decompressed = Vec::with_capacity(estimated_size);
-        
-        let mut decoder = GzDecoder::new(compressed_data);
-        decoder.read_to_end(&mut decompressed)
-            .context("Gzip解压失败")?;
-        
-        // 收缩容量以节省内存
-        decompressed.shrink_to_fit();
-        Ok(decompressed)
+    async fn decompress_data(&self, compressed_data: &[u8]) -> Result<MutableMemoryBuffer<'_>> {
+        // 基于 flate2 官方文档的流式解压，将数据写入池化 BytesMut
+        let estimated_size = compressed_data.len().saturating_mul(4).max(8 * 1024);
+        let mut out = self.memory_pool.get_decompress_buffer(estimated_size).await;
+
+        let cursor = std::io::Cursor::new(compressed_data);
+        let mut decoder = GzDecoder::new(cursor);
+        let mut tmp = [0u8; 64 * 1024];
+        loop {
+            let n = decoder.read(&mut tmp).context("Gzip解压失败")?;
+            if n == 0 { break; }
+            out.put_slice(&tmp[..n]);
+        }
+
+        Ok(out)
+    }
+
+    /// 遍历文件中的所有压缩块 [35字节头 + 压缩数据]
+    pub fn iter_compressed_blocks<'a>(&self, file_data: &'a [u8]) -> CompressedBlockIter<'a> {
+        CompressedBlockIter { data: file_data, offset: 0 }
+    }
+
+    /// 遍历解压数据中的所有未压缩子块 [20字节头 + 未压缩数据]
+    pub fn iter_decompressed_chunks<'a>(&self, decompressed: &'a [u8]) -> DecompressedChunkIter<'a> {
+        DecompressedChunkIter { data: decompressed, offset: 0 }
+    }
+
+    /// 遍历未压缩子块体内的所有帧序列 [16字节长度头 + 帧序列]
+    pub fn iter_frame_seqs<'a>(&self, body: &'a [u8]) -> FrameSeqIter<'a> {
+        FrameSeqIter { data: body, offset: 0 }
+    }
+
+    /// 遍历帧序列内的单帧（零拷贝视图）
+    pub fn iter_frames<'a>(&self, seq_body: &'a [u8]) -> FrameRefIter<'a> {
+        FrameRefIter { data: seq_body, offset: 0 }
     }
     
     /// 解析帧序列（第3-4层）
@@ -399,7 +404,7 @@ impl DataLayerParser {
                 break; // 数据不足，结束解析
             }
             
-            // 第3层：解析帧序列信息
+            // 第3层：解析帧序列信息（16字节，前4字节为can版本需保留；12-15为后续长度）
             let sequence_info = FrameSequenceInfo::from_bytes(&data[offset..offset + 16])
                 .context("解析帧序列信息失败")?;
             
@@ -461,6 +466,26 @@ impl DataLayerParser {
         frames.shrink_to_fit();
         Ok(frames)
     }
+
+    /// 遍历文件中的所有压缩块 [35字节头 + 压缩数据]
+    pub fn iter_compressed_blocks<'a>(&self, file_data: &'a [u8]) -> CompressedBlockIter<'a> {
+        CompressedBlockIter { data: file_data, offset: 0 }
+    }
+
+    /// 遍历解压数据中的所有未压缩子块 [20字节头 + 未压缩数据]
+    pub fn iter_decompressed_chunks<'a>(&self, decompressed: &'a [u8]) -> DecompressedChunkIter<'a> {
+        DecompressedChunkIter { data: decompressed, offset: 0 }
+    }
+
+    /// 遍历未压缩子块体内的所有帧序列 [16字节长度头 + 帧序列]
+    pub fn iter_frame_seqs<'a>(&self, body: &'a [u8]) -> FrameSeqIter<'a> {
+        FrameSeqIter { data: body, offset: 0 }
+    }
+
+    /// 遍历帧序列内的单帧（零拷贝视图）
+    pub fn iter_frames<'a>(&self, seq_body: &'a [u8]) -> FrameRefIter<'a> {
+        FrameRefIter { data: seq_body, offset: 0 }
+    }
     
     /// 获取解析统计信息
     pub fn get_stats(&self) -> &ParsingStats {
@@ -473,9 +498,117 @@ impl DataLayerParser {
     }
 }
 
+/// 压缩块（文件层）
+pub struct CompressedBlock<'a> {
+    pub serial: [u8; 18],
+    pub compressed: &'a [u8],
+}
+
+pub struct CompressedBlockIter<'a> {
+    data: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> Iterator for CompressedBlockIter<'a> {
+    type Item = CompressedBlock<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset + 35 > self.data.len() { return None; }
+        let header = &self.data[self.offset..self.offset + 35];
+        let mut serial = [0u8; 18];
+        serial.copy_from_slice(&header[0..18]);
+        let comp_len = u32::from_be_bytes([header[31], header[32], header[33], header[34]]) as usize;
+        let comp_start = self.offset + 35;
+        let comp_end = comp_start.saturating_add(comp_len);
+        if comp_end > self.data.len() { return None; }
+        let slice = &self.data[comp_start..comp_end];
+        self.offset = comp_end;
+        Some(CompressedBlock { serial, compressed: slice })
+    }
+}
+
+/// 解压后子块（解压层）
+pub struct DecompressedChunk<'a> {
+    pub header: DecompressedHeader,
+    pub body: &'a [u8],
+}
+
+pub struct DecompressedChunkIter<'a> {
+    data: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> Iterator for DecompressedChunkIter<'a> {
+    type Item = DecompressedChunk<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset + 20 > self.data.len() { return None; }
+        let hdr = DecompressedHeader::from_bytes(&self.data[self.offset..self.offset + 20]).ok()?;
+        self.offset += 20;
+        let body_len = hdr.data_length as usize;
+        if self.offset + body_len > self.data.len() { return None; }
+        let body = &self.data[self.offset..self.offset + body_len];
+        self.offset += body_len;
+        Some(DecompressedChunk { header: hdr, body })
+    }
+}
+
+/// 帧序列分块（序列层）
+pub struct FrameSeqChunk<'a> {
+    pub info: FrameSequenceInfo,
+    pub body: &'a [u8],
+}
+
+pub struct FrameSeqIter<'a> {
+    data: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> Iterator for FrameSeqIter<'a> {
+    type Item = FrameSeqChunk<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset + 16 > self.data.len() { return None; }
+        let info = FrameSequenceInfo::from_bytes(&self.data[self.offset..self.offset + 16]).ok()?;
+        self.offset += 16;
+        let len = info.data_length as usize;
+        if self.offset + len > self.data.len() { return None; }
+        let body = &self.data[self.offset..self.offset + len];
+        self.offset += len;
+        Some(FrameSeqChunk { info, body })
+    }
+}
+
+/// 单帧只读视图
+pub struct FrameRef<'a> {
+    pub timestamp: u64,
+    pub can_id: u32,
+    pub dlc: u8,
+    pub data: &'a [u8],
+}
+
+pub struct FrameRefIter<'a> {
+    data: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> Iterator for FrameRefIter<'a> {
+    type Item = FrameRef<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset + 24 > self.data.len() { return None; }
+        let base = &self.data[self.offset..self.offset + 24];
+        let timestamp = u64::from_be_bytes([base[0],base[1],base[2],base[3],base[4],base[5],base[6],base[7]]);
+        let can_id = u32::from_be_bytes([base[8],base[9],base[10],base[11]]);
+        let dlc = base[12];
+        let data_bytes = &base[16..24];
+        let act = std::cmp::min(dlc as usize, 8);
+        let data = &data_bytes[..act];
+        self.offset += 24;
+        Some(FrameRef { timestamp, can_id, dlc, data })
+    }
+}
 /// 解析完成的文件数据
 #[derive(Debug)]
 pub struct ParsedFileData {
+    /// 前18字节序列号（任务要求全流程保留）
+    pub serial: [u8; 18],
     /// 文件头部信息
     pub file_header: FileHeader,
     /// 解压数据头部

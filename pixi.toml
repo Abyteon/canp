@@ -1,0 +1,98 @@
+[project]
+name = "canp-python"
+version = "0.1.0"
+description = "高性能CAN总线数据处理流水线 - Python版本"
+authors = ["CANP Team <team@canp-project.org>"]
+channels = ["conda-forge"]
+platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
+
+# Python版本
+[dependencies]
+python = "~=3.11.0"
+
+# 核心数据处理依赖
+numpy = "~=1.24.0"
+pandas = "~=2.0.0"
+
+# 配置管理
+pydantic = "~=2.0.0"
+
+# 日志和监控
+structlog = "~=23.0.0"
+rich = "~=13.0.0"
+
+# 性能监控
+psutil = "~=5.9.0"
+
+# 开发依赖
+[pypi-dependencies]
+# 测试框架
+pytest = "~=7.0.0"
+pytest-asyncio = "~=0.21.0"
+pytest-cov = "~=4.0.0"
+
+# 类型检查
+mypy = "~=1.0.0"
+
+# 代码质量
+black = "~=23.0.0"
+isort = "~=5.12.0"
+flake8 = "~=6.0.0"
+
+# 性能分析
+memory-profiler = "~=0.61.0"
+
+# 可选依赖 - 高性能数据处理
+pyarrow = "~=14.0.0"
+duckdb = "~=0.9.0"
+
+# 可选依赖 - 异步处理
+aiofiles = "~=23.0.0"
+
+# 任务定义
+[tasks]
+# 安装项目
+install = "pip install -e ."
+
+# 运行测试
+test = "pytest tests/ -v"
+test-cov = "pytest tests/ --cov=src/canp --cov-report=html --cov-report=term"
+
+# 运行示例
+example = "python examples/basic_usage.py"
+
+# 代码格式化
+format = "black src/ tests/ examples/"
+format-check = "black --check src/ tests/ examples/"
+sort-imports = "isort src/ tests/ examples/"
+
+# 类型检查
+type-check = "mypy src/"
+
+# 代码质量检查
+lint = "flake8 src/ tests/ examples/"
+
+# 完整检查
+check = { depends-on = ["format-check", "sort-imports", "type-check", "lint", "test"] }
+
+# 开发环境设置
+dev-setup = { depends-on = ["install", "check"] }
+
+# 性能基准测试
+benchmark = "pytest tests/benchmarks/ --benchmark-only"
+
+# 清理
+clean = "rm -rf build/ dist/ *.egg-info/ .pytest_cache/ .mypy_cache/ htmlcov/"
+
+# 系统要求
+[system-requirements]
+# macOS要求
+macos = "12.0"
+
+# 激活脚本
+[activation]
+scripts = ["scripts/activate.sh"]
+
+# Windows激活脚本
+[target.win-64.activation]
+scripts = ["scripts/activate.bat"] 

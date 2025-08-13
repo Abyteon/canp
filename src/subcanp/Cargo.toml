@@ -1,0 +1,17 @@
+[package]
+name = "subcanp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.98"
+bytes = "1.10.1"
+crossbeam = "0.8.4"
+flate2 = "1.1.2"
+lock_pool = "0.2.0"
+memmap2 = "0.9.7"
+num_cpus = "1.17.0"
+rayon = "1.10.0"
+tokio = { version = "1.47.1", features = ["full"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
